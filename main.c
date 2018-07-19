@@ -51,8 +51,11 @@
 
 enum State {
   STATE_START,
+  STATE_POLL,
   STATE_DATA1,
-  STATE_DATA2
+  STATE_DATA2,
+  STATE_MEM_START,
+  STATE_IGNORE
 };
 
 /* Globals */
@@ -62,6 +65,8 @@ static volatile bool doPoll = false;
 static volatile uint8_t controllerState[2] = {0xff, 0xff};
 /* Protocol state machine state */
 static volatile enum State state = STATE_START;
+/* Number of bytes to ignore */
+static uint8_t ignore = 0;
 
 static void setup() {
   // Set MISO as output
@@ -164,16 +169,29 @@ static inline uint8_t transact(uint8_t data)
 {
   switch (state) {
   case STATE_START:
-    if (data == 0x1) {
+    if (data == 0x01) {
       doAck = true;
+      state = STATE_POLL;
       return 0x41;
-    } else if (data == 0x42) {
+    } else if (data == 0x81) {
+      // For reasons I can't fathom, the controller and memory card on
+      // a given port share an SPI SS line.  This means we have to
+      // interpret memory card commands and avoid pulling MISO low for
+      // the duration of the transaction by always responding with
+      // 0xFF.
+      state = STATE_MEM_START;
+      return 0xFF;
+    }
+    break;
+  case STATE_POLL:
+    if (data == 0x42) {
       doAck = true;
       doPoll = true;
       state = STATE_DATA1;
       return 0x5a;
     }
-    break;
+    state = STATE_START;
+    return 0xFF;
   case STATE_DATA1:
     doAck = true;
     state = STATE_DATA2;
@@ -182,7 +200,27 @@ static inline uint8_t transact(uint8_t data)
     doAck = true;
     state = STATE_START;
     return controllerState[1];
+  case STATE_MEM_START:
+    if (data == 0x57) {
+      // Memory card write
+      ignore = 136;
+      state = STATE_IGNORE;
+      return 0xFF;
+    } else if (data == 0x52) {
+      // Memory card read
+      ignore = 138;
+      state = STATE_IGNORE;
+      return 0xFF;
+    }
+    state = STATE_START;
+    return 0xFF;
+  case STATE_IGNORE:
+    // Ignore remainder of memory card transaction
+    if (--ignore == 0)
+      state = STATE_START;
+    return 0xFF;
   }
+
   return 0xFF;
 }
 
