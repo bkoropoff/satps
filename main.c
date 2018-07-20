@@ -43,20 +43,26 @@
 #define SETTING_DDR_BIT0 DDD0
 #define SETTING_DDR_BIT1 DDD1
 
+// SS pin
+#define SS_PIN_REG PINB
+#define SS_PIN_BIT PINB0
+#define SS_DDR DDRB
+#define SS_DDR_BIT DDB0
+
 // Delay in microseconds for controller to settle after changing select lines
 #define SS_DELAY 4
 
 #define SET(R, P) ((R) |= _BV(P))
 #define CLEAR(R, P) ((R) &= ~_BV(P))
+#define TEST(R, P) (((R) & _BV(P)) != 0)
 
 enum State {
   STATE_START,
   STATE_POLL,
   STATE_DATA1,
   STATE_DATA2,
-  STATE_MEM_START,
   STATE_IGNORE
-};
+} __attribute__((packed));
 
 /* Globals */
 static volatile bool doAck = false;
@@ -65,8 +71,6 @@ static volatile bool doPoll = false;
 static volatile uint8_t controllerState[2] = {0xff, 0xff};
 /* Protocol state machine state */
 static volatile enum State state = STATE_START;
-/* Number of bytes to ignore */
-static uint8_t ignore = 0;
 
 static void setup() {
   // Set MISO as output
@@ -85,6 +89,10 @@ static void setup() {
   CLEAR(SETTING_DDR, SETTING_DDR_BIT1);
   SET(SETTING_PORT_REG, SETTING_PORT_BIT0);
   SET(SETTING_PORT_REG, SETTING_PORT_BIT1);
+  // Set up pin change interrupts on SS
+  CLEAR(SS_DDR, SS_DDR_BIT);
+  SET(PCMSK0, PCINT0);
+  SET(PCICR, PCIE0);
   // Turn on interrupts
   sei();
 }
@@ -165,68 +173,70 @@ static void poll(void)
   sei();
 }
 
-static inline uint8_t transact(uint8_t data)
+static inline void transact(uint8_t data)
 {
   switch (state) {
   case STATE_START:
-    if (data == 0x01) {
+    switch (data) {
+    case 0x01:
+      SPDR = 0x41;
       doAck = true;
       state = STATE_POLL;
-      return 0x41;
-    } else if (data == 0x81) {
+      return;
+    default:
       // For reasons I can't fathom, the controller and memory card on
       // a given port share an SPI SS line.  This means we have to
-      // interpret memory card commands and avoid pulling MISO low for
-      // the duration of the transaction by always responding with
-      // 0xFF.
-      state = STATE_MEM_START;
-      return 0xFF;
+      // avoid responding to commands not addressed to the controller.
+      // The ignore state avoids driving MISO and is exited when the
+      // pin change interrupt sees SS go inactive again.
+      SPDR = 0xFF;
+      state = STATE_IGNORE;
+      return;
     }
-    break;
   case STATE_POLL:
-    if (data == 0x42) {
+    switch (data) {
+    case 0x42:
+      SPDR = 0x5a;
       doAck = true;
       doPoll = true;
       state = STATE_DATA1;
-      return 0x5a;
+      return;
+    default:
+      // FIXME: we do hit this branch, but I haven't yet looked at the
+      // command being sent.  Not ACKing and going back to the start
+      // state works.
+      SPDR = 0xFF;
+      state = STATE_START;
+      return;
     }
-    state = STATE_START;
-    return 0xFF;
   case STATE_DATA1:
+    SPDR = controllerState[0];
     doAck = true;
     state = STATE_DATA2;
-    return controllerState[0];
+    return;
   case STATE_DATA2:
+    SPDR = controllerState[1];
     doAck = true;
     state = STATE_START;
-    return controllerState[1];
-  case STATE_MEM_START:
-    if (data == 0x57) {
-      // Memory card write
-      ignore = 136;
-      state = STATE_IGNORE;
-      return 0xFF;
-    } else if (data == 0x52) {
-      // Memory card read
-      ignore = 138;
-      state = STATE_IGNORE;
-      return 0xFF;
-    }
-    state = STATE_START;
-    return 0xFF;
+    return;
   case STATE_IGNORE:
-    // Ignore remainder of memory card transaction
-    if (--ignore == 0)
-      state = STATE_START;
-    return 0xFF;
+    SPDR = 0xFF;
+    return;
+  default:
+    __builtin_unreachable();
   }
-
-  return 0xFF;
 }
 
 ISR(SPI_STC_vect)
 {
-  SPDR = transact(SPDR);
+  transact(SPDR);
+}
+
+ISR(PCINT0_vect)
+{
+  // Reset state machine when we are unselected
+  if (TEST(SS_PIN_REG, SS_PIN_BIT))
+    state = STATE_START;
 }
 
 static void loop() {
