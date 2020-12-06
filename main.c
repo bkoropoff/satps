@@ -50,7 +50,7 @@
 #define SS_DDR_BIT DDB0
 
 // Delay in microseconds for controller to settle after changing select lines
-#define SS_DELAY 4
+#define SS_DELAY 2
 
 #define SET(R, P) ((R) |= _BV(P))
 #define CLEAR(R, P) ((R) &= ~_BV(P))
@@ -181,6 +181,7 @@ static inline void transact(uint8_t data)
     case 0x01:
       SPDR = 0x41;
       doAck = true;
+      doPoll = true;
       state = STATE_POLL;
       return;
     default:
@@ -198,7 +199,6 @@ static inline void transact(uint8_t data)
     case 0x42:
       SPDR = 0x5a;
       doAck = true;
-      doPoll = true;
       state = STATE_DATA1;
       return;
     default:
