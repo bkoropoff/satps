@@ -36,12 +36,15 @@
 #define SETTING_PIN_REG PIND
 #define SETTING_PIN_BIT0 PIND0
 #define SETTING_PIN_BIT1 PIND1
+#define SETTING_PIN_BIT2 PIND4
 #define SETTING_PORT_REG PORTD
 #define SETTING_PORT_BIT0 PORTD0
 #define SETTING_PORT_BIT1 PORTD1
+#define SETTING_PORT_BIT2 PORTD4
 #define SETTING_DDR DDRD
 #define SETTING_DDR_BIT0 DDD0
 #define SETTING_DDR_BIT1 DDD1
+#define SETTING_DDR_BIT2 DDD4
 
 // SS pin
 #define SS_PIN_REG PINB
@@ -87,8 +90,10 @@ static void setup() {
   // Set setting pins as inputs with pullups
   CLEAR(SETTING_DDR, SETTING_DDR_BIT0);
   CLEAR(SETTING_DDR, SETTING_DDR_BIT1);
+  CLEAR(SETTING_DDR, SETTING_DDR_BIT2);
   SET(SETTING_PORT_REG, SETTING_PORT_BIT0);
   SET(SETTING_PORT_REG, SETTING_PORT_BIT1);
+  SET(SETTING_PORT_REG, SETTING_PORT_BIT2);
   // Set up pin change interrupts on SS
   CLEAR(SS_DDR, SS_DDR_BIT);
   SET(PCMSK0, PCINT0);
@@ -97,11 +102,12 @@ static void setup() {
   sei();
 }
 
-static void readSettings(bool* vselect, bool* rotate)
+static void readSettings(bool* vselect, bool* rotate, bool* swap)
 {
    uint8_t reg = SETTING_PIN_REG;
    *vselect = (reg & _BV(SETTING_PIN_BIT0)) == 0;
    *rotate = (reg & _BV(SETTING_PIN_BIT1)) == 0;
+   *swap = (reg & _BV(SETTING_PIN_BIT2)) == 0;
 }
 
 static inline uint16_t readSSData(void)
@@ -140,7 +146,9 @@ static void poll(void)
 {
   bool vselect = false;
   bool rotate = false;
-  readSettings(&vselect, &rotate);
+  bool swap = false;
+
+  readSettings(&vselect, &rotate, &swap);
   
   uint16_t ss = readSSController();
   uint8_t z = (ss >> 0) & 1;
@@ -157,6 +165,8 @@ static void poll(void)
   uint8_t rt = (ss >> 11) & 1;
   uint8_t l = (ss >> 15) & 1;
   uint8_t sl = 1;
+  uint8_t cs0 = 0;
+  uint8_t cs1 = 0;
 
   // Treat up + start as select if set to
   if (vselect && !up && !st) {
@@ -164,12 +174,19 @@ static void poll(void)
     sl = 0;
   }
 
-  cli();
-  controllerState[0] = (sl << 0) | (1 << 1) | (1 << 2) | (st << 3) | (up << 4) | (rt << 5) | (dn << 6) | (lt << 7);
-  if (rotate)
-    controllerState[1] = (l << 0) | (r << 1) | (z << 2) | (c << 3) | (x << 4) | (y << 5) | (b << 6) | (a << 7);
+  cs0 = (sl << 0) | (1 << 1) | (1 << 2) | (st << 3) | (up << 4) | (rt << 5) | (dn << 6) | (lt << 7);
+  if (swap)
+    cs1 = (z << 0) | (c << 1) | (l << 2) | (r << 3);
   else
-    controllerState[1] = (l << 0) | (r << 1) | (z << 2) | (c << 3) | (y << 4) | (b << 5) | (a << 6) | (x << 7);
+    cs1 = (l << 0) | (r << 1) | (z << 2) | (c << 3);
+  if (rotate)
+    cs1 |= (x << 4) | (y << 5) | (b << 6) | (a << 7);
+  else
+    cs1 |= (y << 4) | (b << 5) | (a << 6) | (x << 7);
+
+  cli();
+  controllerState[0] = cs0;
+  controllerState[1] = cs1;
   sei();
 }
 
