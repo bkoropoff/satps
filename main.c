@@ -4,27 +4,42 @@
 #include <avr/interrupt.h>
 #include <util/delay.h>
 
-// MISO pin settings
+// I/O definitions.  (PS) indicates an interface with the
+// PlayStation console, (SS) indicates an interface with the
+// Saturn controller.
+
+// (PS) MISO pin.  Set as output to use SPI.
 #define MISO_DDR_REG DDRB
 #define MISO_DDR_BIT DDB3
 
-// ACK pin settings
+// (PS) ACK pin.  Side channel to tell PS that
+// something was present to receive SPI call.
 #define ACK_PORT_REG PORTC
 #define ACK_PORT_BIT PORTC6
 #define ACK_DDR_REG DDRC
 #define ACK_DDR_BIT DDC6
-// Width of ack pulse in microseconds
+// (PS) Width of ack pulse in microseconds
 #define ACK_WIDTH 2
 
-// Select pins
-#define SEL_PORT_REG PORTB
-#define SEL_PORT_BIT0 PORTB4
-#define SEL_PORT_BIT1 PORTB5
-#define SEL_DDR DDRB
-#define SEL_DDR_BIT0 DDB4
-#define SEL_DDR_BIT1 DDB5
+// (PS) SPI select pin.  Used by the console to start an SPI call
+// with the controller port assembly.
+#define SS_PIN_REG PINB
+#define SS_PIN_BIT PINB0
+#define SS_DDR DDRB
+#define SS_DDR_BIT DDB0
 
-// Data pins
+
+// (SS) Select pins.  Control which buttons controller outputs on data pins.
+#define SEL_PORT_REG PORTB
+#define SEL_PORT_VSELECT PORTB4
+#define SEL_PORT_ROTATE PORTB5
+#define SEL_DDR DDRB
+#define SEL_DDR_VSELECT DDB4
+#define SEL_DDR_ROTATE DDB5
+// (SS) Delay in microseconds for controller to settle after changing select lines
+#define SS_DELAY 2
+
+// (SS) Data pins.  Output of controller.
 #define DATA_PIN_REG PINF
 #define DATA_PIN_SHIFT 4
 #define DATA_PORT_REG PORTF
@@ -32,29 +47,36 @@
 #define DATA_DDR DDRF
 #define DATA_DDR_BITS (_BV(DDF4) | _BV(DDF5) | _BV(DDF6) | _BV(DDF7))
 
-// Setting pins
+// Setting pins.  Control how controller inputs are converted.
+// - VSELECT:
+//   * Low: treat SS up + start as PS select button
+//   * High: don't
+// - ROTATE:
+//   * Low: map face buttons so SS A and B correspond to PS square and cross.
+//     This looks "rotated" compared to the physical button layouts, but is
+//     the most natural way to use the SS controller.
+//   * High: map face buttons according to physical layout.  SS A and B correspond
+//     to PS cross and circle.
+// - SWAP:
+//   * Low: map SS shoulder buttons to PS L1/R1 and SS Z/C to PS L2/R2.
+//     This is more natural for games that expect you to use L1/R1 in combination
+//     with face buttons.
+//   * High: map SS shoulder buttons to PS L2/R2 and SS z/C to PS L1/R2.
+//     This is more natural for 6-button fighting games.
 #define SETTING_PIN_REG PIND
-#define SETTING_PIN_BIT0 PIND0
-#define SETTING_PIN_BIT1 PIND1
-#define SETTING_PIN_BIT2 PIND4
+#define SETTING_PIN_VSELECT PIND0
+#define SETTING_PIN_ROTATE PIND1
+#define SETTING_PIN_SWAP PIND4
 #define SETTING_PORT_REG PORTD
-#define SETTING_PORT_BIT0 PORTD0
-#define SETTING_PORT_BIT1 PORTD1
-#define SETTING_PORT_BIT2 PORTD4
+#define SETTING_PORT_VSELECT PORTD0
+#define SETTING_PORT_ROTATE PORTD1
+#define SETTING_PORT_SWAP PORTD4
 #define SETTING_DDR DDRD
-#define SETTING_DDR_BIT0 DDD0
-#define SETTING_DDR_BIT1 DDD1
-#define SETTING_DDR_BIT2 DDD4
+#define SETTING_DDR_VSELECT DDD0
+#define SETTING_DDR_ROTATE DDD1
+#define SETTING_DDR_SWAP DDD4
 
-// SS pin
-#define SS_PIN_REG PINB
-#define SS_PIN_BIT PINB0
-#define SS_DDR DDRB
-#define SS_DDR_BIT DDB0
-
-// Delay in microseconds for controller to settle after changing select lines
-#define SS_DELAY 2
-
+// Helper macros
 #define SET(R, P) ((R) |= _BV(P))
 #define CLEAR(R, P) ((R) &= ~_BV(P))
 #define TEST(R, P) (((R) & _BV(P)) != 0)
@@ -67,12 +89,12 @@ enum State {
   STATE_IGNORE
 } __attribute__((packed));
 
-/* Globals */
+// Globals
 static volatile bool doAck = false;
 static volatile bool doPoll = false;
-/* PS digital controller state */
+// PS digital controller state
 static volatile uint8_t controllerState[2] = {0xff, 0xff};
-/* Protocol state machine state */
+// Protocol state machine state
 static volatile enum State state = STATE_START;
 
 static void setup() {
@@ -82,18 +104,18 @@ static void setup() {
   SPCR = _BV(SPE) | _BV(DORD) | _BV(CPOL) | _BV(CPHA) | _BV(SPIE);
   SPDR = 0xFF;
   // Set select pins as outputs
-  SET(SEL_DDR, SEL_DDR_BIT0);
-  SET(SEL_DDR, SEL_DDR_BIT1);
+  SET(SEL_DDR, SEL_DDR_VSELECT);
+  SET(SEL_DDR, SEL_DDR_ROTATE);
   // Set data pins as inputs with pullups
   DATA_DDR &= ~DATA_DDR_BITS;
   DATA_PORT_REG |= DATA_PORT_BITS;
   // Set setting pins as inputs with pullups
-  CLEAR(SETTING_DDR, SETTING_DDR_BIT0);
-  CLEAR(SETTING_DDR, SETTING_DDR_BIT1);
-  CLEAR(SETTING_DDR, SETTING_DDR_BIT2);
-  SET(SETTING_PORT_REG, SETTING_PORT_BIT0);
-  SET(SETTING_PORT_REG, SETTING_PORT_BIT1);
-  SET(SETTING_PORT_REG, SETTING_PORT_BIT2);
+  CLEAR(SETTING_DDR, SETTING_DDR_VSELECT);
+  CLEAR(SETTING_DDR, SETTING_DDR_ROTATE);
+  CLEAR(SETTING_DDR, SETTING_DDR_SWAP);
+  SET(SETTING_PORT_REG, SETTING_PORT_VSELECT);
+  SET(SETTING_PORT_REG, SETTING_PORT_ROTATE);
+  SET(SETTING_PORT_REG, SETTING_PORT_SWAP);
   // Set up pin change interrupts on SS
   CLEAR(SS_DDR, SS_DDR_BIT);
   SET(PCMSK0, PCINT0);
@@ -105,9 +127,9 @@ static void setup() {
 static void readSettings(bool* vselect, bool* rotate, bool* swap)
 {
    uint8_t reg = SETTING_PIN_REG;
-   *vselect = (reg & _BV(SETTING_PIN_BIT0)) == 0;
-   *rotate = (reg & _BV(SETTING_PIN_BIT1)) == 0;
-   *swap = (reg & _BV(SETTING_PIN_BIT2)) == 0;
+   *vselect = (reg & _BV(SETTING_PIN_VSELECT)) == 0;
+   *rotate = (reg & _BV(SETTING_PIN_ROTATE)) == 0;
+   *swap = (reg & _BV(SETTING_PIN_SWAP)) == 0;
 }
 
 static inline uint16_t readSSData(void)
@@ -119,23 +141,23 @@ static inline uint16_t readSSController(void)
 {
   uint16_t result = 0;
 
-  CLEAR(SEL_PORT_REG, SEL_PORT_BIT0);
-  CLEAR(SEL_PORT_REG, SEL_PORT_BIT1);
+  CLEAR(SEL_PORT_REG, SEL_PORT_VSELECT);
+  CLEAR(SEL_PORT_REG, SEL_PORT_ROTATE);
   _delay_us(SS_DELAY);
   result |= readSSData();
   
-  SET(SEL_PORT_REG, SEL_PORT_BIT0);
-  CLEAR(SEL_PORT_REG, SEL_PORT_BIT1);
+  SET(SEL_PORT_REG, SEL_PORT_VSELECT);
+  CLEAR(SEL_PORT_REG, SEL_PORT_ROTATE);
   _delay_us(SS_DELAY);
   result |= readSSData() << 4;
   
-  CLEAR(SEL_PORT_REG, SEL_PORT_BIT0);
-  SET(SEL_PORT_REG, SEL_PORT_BIT1);
+  CLEAR(SEL_PORT_REG, SEL_PORT_VSELECT);
+  SET(SEL_PORT_REG, SEL_PORT_ROTATE);
   _delay_us(SS_DELAY);
   result |= readSSData() << 8;
 
-  SET(SEL_PORT_REG, SEL_PORT_BIT0);
-  SET(SEL_PORT_REG, SEL_PORT_BIT1);
+  SET(SEL_PORT_REG, SEL_PORT_VSELECT);
+  SET(SEL_PORT_REG, SEL_PORT_ROTATE);
   _delay_us(SS_DELAY);
   result |= readSSData() << 12;
 
