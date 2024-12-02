@@ -31,11 +31,11 @@
 
 // (SS) Select pins.  Control which buttons controller outputs on data pins.
 #define SEL_PORT_REG PORTB
-#define SEL_PORT_VSELECT PORTB4
-#define SEL_PORT_ROTATE PORTB5
+#define SEL_PORT_B0 PORTB4
+#define SEL_PORT_B1 PORTB5
 #define SEL_DDR DDRB
-#define SEL_DDR_VSELECT DDB4
-#define SEL_DDR_ROTATE DDB5
+#define SEL_DDR_B0 DDB4
+#define SEL_DDR_B1 DDB5
 // (SS) Delay in microseconds for controller to settle after changing select lines
 #define SS_DELAY 2
 
@@ -104,8 +104,8 @@ static void setup() {
   SPCR = _BV(SPE) | _BV(DORD) | _BV(CPOL) | _BV(CPHA) | _BV(SPIE);
   SPDR = 0xFF;
   // Set select pins as outputs
-  SET(SEL_DDR, SEL_DDR_VSELECT);
-  SET(SEL_DDR, SEL_DDR_ROTATE);
+  SET(SEL_DDR, SEL_DDR_B0);
+  SET(SEL_DDR, SEL_DDR_B1);
   // Set data pins as inputs with pullups
   DATA_DDR &= ~DATA_DDR_BITS;
   DATA_PORT_REG |= DATA_PORT_BITS;
@@ -141,23 +141,23 @@ static inline uint16_t readSSController(void)
 {
   uint16_t result = 0;
 
-  CLEAR(SEL_PORT_REG, SEL_PORT_VSELECT);
-  CLEAR(SEL_PORT_REG, SEL_PORT_ROTATE);
+  CLEAR(SEL_PORT_REG, SEL_PORT_B0);
+  CLEAR(SEL_PORT_REG, SEL_PORT_B1);
   _delay_us(SS_DELAY);
   result |= readSSData();
   
-  SET(SEL_PORT_REG, SEL_PORT_VSELECT);
-  CLEAR(SEL_PORT_REG, SEL_PORT_ROTATE);
+  SET(SEL_PORT_REG, SEL_PORT_B0);
+  CLEAR(SEL_PORT_REG, SEL_PORT_B1);
   _delay_us(SS_DELAY);
   result |= readSSData() << 4;
   
-  CLEAR(SEL_PORT_REG, SEL_PORT_VSELECT);
-  SET(SEL_PORT_REG, SEL_PORT_ROTATE);
+  CLEAR(SEL_PORT_REG, SEL_PORT_B0);
+  SET(SEL_PORT_REG, SEL_PORT_B1);
   _delay_us(SS_DELAY);
   result |= readSSData() << 8;
 
-  SET(SEL_PORT_REG, SEL_PORT_VSELECT);
-  SET(SEL_PORT_REG, SEL_PORT_ROTATE);
+  SET(SEL_PORT_REG, SEL_PORT_B0);
+  SET(SEL_PORT_REG, SEL_PORT_B1);
   _delay_us(SS_DELAY);
   result |= readSSData() << 12;
 
